@@ -113,6 +113,22 @@ volumes:
 python3 deploy/inject.py <deployment-1> <deployment-2> ...
 ```
 
+### 第 3.5 步（可选）：MutatingWebhook 自动注入 —— 新服务零配置
+
+不想每次给业务 YAML 加三件套？部署 webhook 后，**任何请求 `huawei.com/Ascend*` 资源的 Pod 创建时会被自动补齐三件套**，你的下发方式完全不变：
+
+```bash
+WEBHOOK_IMAGE=<你的仓库>/ascend-mutating-webhook:v0.3.0 bash deploy/webhook/setup-cert.sh
+```
+
+设计要点：
+
+- **与 HAMi 的 vgpu.hami.io webhook 共存**：只补 env/volumeMounts/volumes 三处，与 HAMi 的
+  annotation/调度链字段不相交；不碰 nodeName/schedulerName/resources；幂等可重入
+- **只动该动的**：非昇腾 Pod 原样放行；`failurePolicy: Ignore` —— webhook 挂了业务照常创建，仅缺监控
+- `runtimeClassName: ascend` 可选自动补齐（`-add-runtime-class=true` 默认开启，仅当 Pod 未写时）
+- 建议同时部署，服务数量多后可退役手动 inject 流程
+
 滚动重启后即生效：服务加载模型时显存逐笔入账，`ascend_container_hbm_live_bytes` 开始出数。
 
 ### 第 4 步：验证
@@ -217,7 +233,7 @@ MindIE 大版本更新后建议先用 `test/e2e-test-pod.yaml` 回归一次。
 
 ## 路线图
 
-- [ ] MutatingWebhook：按 `huawei.com/Ascend*` 资源请求自动注入，新建服务零配置
+- [x] ~~MutatingWebhook 自动注入~~ → v0.3.0 已实现（见「第 3.5 步」）
 - [ ] 容器级算力使用率（`rtKernelLaunch` 族拦截 + 时间片统计）
 - [ ] recording rule / Grafana dashboard 开箱样例
 - [ ] 310P / 910C 等型号适配验证

@@ -1,5 +1,15 @@
 # changelog
 
+## v0.3.0 (2026-11-10) — MutatingWebhook 自动注入
+
+- 新增 `webhook/` 与 `deploy/webhook/`（Deployment+Service+MutatingWebhookConfiguration+证书脚本）
+- 任何请求 `huawei.com/Ascend*` 资源的 Pod 创建时自动注入三件套（LD_PRELOAD/volumeMounts/volumes），
+  可选自动补 `runtimeClassName: ascend`（-add-runtime-class，默认开）
+- 与 HAMi vgpu.hami.io webhook 共存：字段不相交、幂等、不碰调度领地；集群联合验证通过
+  （裸 Pod → 自动注入 → vNPU 正常 → 130MB 字节级记账）
+- failurePolicy=Ignore：webhook 不可用仅缺监控，绝不阻塞业务创建
+- 自签证书脚本 setup-cert.sh（CA+SAN+Secret+caBundle 内联一条龙）
+
 ## v0.2.0 (2026-11-10) — 开源发布版
 
 - 文档：完整中英文 README、平台指标配置集成示例（docs/platform-integration.md）

@@ -1,0 +1,83 @@
+# ascend-mutating-webhook：自动给请求 huawei.com/Ascend* 的 Pod 注入记账探针三件套
+# 本文件由 setup-cert.sh 渲染部署（__CABUNDLE__ / __IMAGE__ 占位），通常不直接 apply
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ascend-mutating-webhook
+  namespace: monitoring
+  labels:
+    app: ascend-mutating-webhook
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: ascend-mutating-webhook
+  template:
+    metadata:
+      labels:
+        app: ascend-mutating-webhook
+    spec:
+      containers:
+      - name: webhook
+        image: __IMAGE__
+        imagePullPolicy: IfNotPresent
+        args: ["-add-runtime-class=true"]
+        ports:
+        - name: https
+          containerPort: 8443
+        volumeMounts:
+        - name: certs
+          mountPath: /etc/webhook/certs
+          readOnly: true
+        readinessProbe:
+          httpGet: {path: /healthz, port: 8443, scheme: HTTPS}
+          initialDelaySeconds: 3
+          periodSeconds: 10
+        resources:
+          requests: {cpu: 50m, memory: 64Mi}
+          limits: {cpu: 500m, memory: 256Mi}
+      volumes:
+      - name: certs
+        secret: {secretName: ascend-webhook-certs}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ascend-mutating-webhook
+  namespace: monitoring
+spec:
+  selector:
+    app: ascend-mutating-webhook
+  ports:
+  - name: https
+    port: 443
+    targetPort: 8443
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: MutatingWebhookConfiguration
+metadata:
+  name: ascend-container-exporter-webhook
+  labels:
+    app: ascend-mutating-webhook
+webhooks:
+- name: ascend-mutating-webhook.monitoring.svc
+  admissionReviewVersions: ["v1"]
+  sideEffects: None
+  # Ignore：本服务不可用时 Pod 照常创建，仅缺监控（绝不阻塞业务）
+  failurePolicy: Ignore
+  matchPolicy: Equivalent
+  timeoutSeconds: 5
+  reinvocationPolicy: Never
+  rules:
+  - apiGroups: [""]
+    apiVersions: ["v1"]
+    operations: ["CREATE"]
+    resources: ["pods"]
+    scope: Namespaced
+  clientConfig:
+    service:
+      name: ascend-mutating-webhook
+      namespace: monitoring
+      path: /mutate
+      port: 443
+    caBundle: __CABUNDLE__

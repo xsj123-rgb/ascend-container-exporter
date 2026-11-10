@@ -19,3 +19,5 @@ vendor/
 *.swp
 __pycache__/
 *.pyc
+webhook/ascend-mutating-webhook-linux-arm64
+ascend-mutating-webhook
