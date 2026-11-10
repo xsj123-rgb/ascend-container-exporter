@@ -63,14 +63,14 @@ spec:
       initContainers:
       - name: install-shim
         # 把 shim 自动铺到每个节点 /opt/npu-account（新节点加入零手工）
-        image: your-registry.example.com/ascend-container-exporter:v0.2.0
+        image: __IMAGE__
         command: ["sh", "-c", "cp /opt/npu-account/libnpu-account.so /host-npu-account/libnpu-account.so && chmod 755 /host-npu-account/libnpu-account.so && echo shim-installed"]
         volumeMounts:
         - name: host-npu-account
           mountPath: /host-npu-account
       containers:
       - name: exporter
-        image: your-registry.example.com/ascend-container-exporter:v0.2.0
+        image: __IMAGE__
         imagePullPolicy: IfNotPresent
         args:
         - -dir=/run/npu-account

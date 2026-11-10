@@ -80,15 +80,17 @@ docker push <你的仓库>/ascend-container-exporter:v0.2.0
 
 有外网的环境也可用 `deploy/Dockerfile.multistage` 一键构建（注意其中关于 glibc 兼容的说明）。
 
-### 第 2 步：部署 DaemonSet（监控侧，一次部署全局生效）
+### 第 2 步：一键安装（探针 DaemonSet + 自动注入 webhook）
 
 ```bash
-# 修改 deploy/ascend-container-exporter.yaml 中两处镜像地址后：
-kubectl apply -f deploy/ascend-container-exporter.yaml
-kubectl -n monitoring get pods -l app=ascend-container-exporter -o wide   # 每个 NPU 节点一个
+make shim build image IMAGE=<你的仓库>/ascend-container-exporter:v0.4.0   # shim 须在 NPU 节点编译
+IMAGE=<你的仓库>/ascend-container-exporter:v0.4.0 make install
 ```
 
-DaemonSet 的 initContainer 会自动把 shim 铺到每个节点 `/opt/npu-account/`——**之后新增节点零手工**。
+`make install` 一条龙完成：证书生成 → Secret → 探针 DaemonSet（自动铺 shim 到每个 NPU 节点）→
+自动注入 webhook。装完即"业务下发即被监控"。卸载：`make uninstall`（`PURGE_DIRS=1` 连宿主目录一起清）。
+
+不想要 webhook 自动注入的，也可以只部署探针：`kubectl apply -f deploy/exporter-daemonset.yaml`。
 
 ### 第 3 步：工作负载接入（业务侧，比平时多 3 行）
 
@@ -113,13 +115,9 @@ volumes:
 python3 deploy/inject.py <deployment-1> <deployment-2> ...
 ```
 
-### 第 3.5 步（可选）：MutatingWebhook 自动注入 —— 新服务零配置
+### 第 3.5 步：MutatingWebhook 自动注入（`make install` 已内置）
 
-不想每次给业务 YAML 加三件套？部署 webhook 后，**任何请求 `huawei.com/Ascend*` 资源的 Pod 创建时会被自动补齐三件套**，你的下发方式完全不变：
-
-```bash
-WEBHOOK_IMAGE=<你的仓库>/ascend-mutating-webhook:v0.3.0 bash deploy/webhook/setup-cert.sh
-```
+`make install` 会一并部署自动注入 webhook：**任何请求 `huawei.com/Ascend*` 资源的 Pod 创建时被自动补齐三件套**，你的下发方式完全不变（甚至忘写 `runtimeClassName` 都会自动补 `ascend`）。
 
 设计要点：
 

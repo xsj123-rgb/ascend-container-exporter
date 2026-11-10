@@ -1,5 +1,5 @@
 # ascend-mutating-webhook：自动给请求 huawei.com/Ascend* 的 Pod 注入记账探针三件套
-# 本文件由 setup-cert.sh 渲染部署（__CABUNDLE__ / __IMAGE__ 占位），通常不直接 apply
+# 本文件由 scripts/install.sh 渲染部署（__CABUNDLE__ / __IMAGE__ 占位），通常不直接 apply
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -20,6 +20,7 @@ spec:
       containers:
       - name: webhook
         image: __IMAGE__
+        command: ["/usr/local/bin/ascend-mutating-webhook"]
         imagePullPolicy: IfNotPresent
         args: ["-add-runtime-class=true"]
         ports:

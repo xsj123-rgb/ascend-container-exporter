@@ -1,5 +1,15 @@
 # changelog
 
+## v0.4.0 (2026-11-10) — 一键安装 + 结构标准化
+
+- **`make install` 一键安装**：证书/Secret/探针 DaemonSet/自动注入 webhook 全自动，
+  并合并为单一镜像（内含两个二进制 + shim）；新增 `make uninstall`（`PURGE_DIRS=1` 连宿主目录清理）
+- **项目结构标准化**：Go 标准 cmd/ 布局 + 根模块统一（module github.com/xsj123-rgb/ascend-container-exporter），
+  清单改 `__IMAGE__`/`__CABUNDLE__` 占位符由 install.sh 渲染
+- 清单更名：deploy/ascend-container-exporter.yaml → deploy/exporter-daemonset.yaml；
+  webhook 清单移至 deploy/webhook.yaml；legacy setup-cert.sh 并入 install.sh
+- 全新用户验收：卸载全部旧组件 → 一键安装 → 裸业务 Pod 自动注入 → HAMi 调度/显存采集全通
+
 ## v0.3.0 (2026-11-10) — MutatingWebhook 自动注入
 
 - 新增 `webhook/` 与 `deploy/webhook/`（Deployment+Service+MutatingWebhookConfiguration+证书脚本）
