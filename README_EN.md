@@ -93,7 +93,7 @@ production-tested on 9 services / 18 cards.
 - Lazy-initializing services (e.g. OCR) report data only after the first inference request.
 - Known HAMi device-plugin race: a fresh vNPU pod can lose its vNPU to the idle-cleanup loop
   within the first ~47s — just delete and recreate the pod normally; **never** `--force`-delete
-  vNPU pods (leaves stale driver state). Reported upstream.
+  vNPU pods (leaves stale driver state); frequent pod churn can also leave the runtime reusing a destroyed vNPU ID — restarting the tenant pod on that chip rebuilds its state. Reported upstream.
 
 ## License
 

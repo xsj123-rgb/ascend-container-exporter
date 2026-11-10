@@ -212,9 +212,12 @@ MindIE 大版本更新后建议先用 `test/e2e-test-pod.yaml` 回归一次。
 2. **性能开销极小但存在**：每次显存分配/释放多一次 mutex + 一次小 JSON 行追加（<1μs 量级）；
    模型加载期数千次分配实测无感。
 3. **懒加载服务首数据延迟**：CANN 运行时在首次使用 NPU 时才加载，记账随首个请求出现（如 OCR 类服务）——属预期。
-4. **HAMi vNPU 清理循环竞态（HAMi 侧问题）**：新 Pod 建立后 ~47s 内若被插件的闲置清理命中，vNPU 被误销毁，
-   Pod 永久带着失效设备（`aclInit` 报 507008 / `rtGetDevMsg` 不支持）。规避：失败 Pod 正常 `kubectl delete` 重建；
-   **千万不要 `--force --grace-period=0` 强删 vNPU Pod**（会留驱动脏状态）。建议向 HAMi 社区反馈修复。
+4. **HAMi vNPU 清理循环竞态与 ID 复用失效（HAMi/运行时侧问题）**：
+   - 新 Pod 建立后 ~47s 内若被插件的闲置清理命中，vNPU 被误销毁，Pod 永久带着失效设备（`aclInit` 报 507008 / `rtGetDevMsg` 不支持）；
+   - 频繁建删测试 Pod 还会让 ascend-docker-runtime 进入「销毁 vNPU 后仍复用旧 ID」状态
+     （`vnpu split done: vdevice: N` 日志正常但驱动层无此实例）——同一芯片的租户 Pod 重启一次即可重建芯片 vNPU 状态；
+   - 规避：失败 Pod 正常 `kubectl delete` 重建；**千万不要 `--force --grace-period=0` 强删 vNPU Pod**（会留驱动脏状态）。
+     建议向 HAMi 社区反馈修复。
 5. **单副本 Deployment 滚动可能卡 Pending**：maxSurge 新 Pod 抢不到记账额度时，删旧 Pod 放行；
    若旧 ReplicaSet 自愈拉起竞争 Pod，先 `kubectl scale rs <旧RS> --replicas=0`。
 6. 显存**超卖/共享上限**类指标请继续使用调度器（如 HAMi）的分配口径；本探针提供的是**真实用量**，两者互补。
