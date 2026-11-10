@@ -1,4 +1,6 @@
-# 工作负载接入示例：给任意昇腾推理/训练工作负载增加 3 项配置即可被采集
+# 工作负载接入示例
+# 部署了自动注入 webhook（make install 默认）时，以下 3 项由 webhook 在 Pod 创建时自动补齐，
+# 业务 YAML 无需手写 —— 本文件可作为注入内容参考 / 未装 webhook 时的手动接入模板。
 # 关键 = LD_PRELOAD 环境变量 + 两个 hostPath 挂载；runtimeClassName: ascend 是昇腾 Pod 本来就需要的
 apiVersion: apps/v1
 kind: Deployment

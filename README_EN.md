@@ -49,17 +49,23 @@ Key design decisions (hard-won):
 ## Quick start
 
 ```bash
-# 1) Build (shim on an NPU node to match its glibc; exporter cross-compiles anywhere)
+# 1) Build (shim on an NPU node to match its glibc; Go binaries cross-compile anywhere)
 gcc -shared -fPIC -O2 -Wall -o libnpu-account.so shim/npu_shim.c -ldl -lpthread -lrt
-cd exporter && CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -ldflags="-s -w" -o ../ascend-container-exporter . && cd ..
-docker build -f deploy/Dockerfile -t <registry>/ascend-container-exporter:v0.2.0 . && docker push ...
+make build    # -> bin/ascend-container-exporter + bin/ascend-mutating-webhook
+docker build -f deploy/Dockerfile -t <registry>/ascend-container-exporter:v0.4.0 . && docker push ...
 
-# 2) Deploy the DaemonSet (edit image refs first)
-kubectl apply -f deploy/ascend-container-exporter.yaml
+# 2) One-command install: certs -> Secret -> exporter DaemonSet -> auto-injection webhook
+IMAGE=<registry>/ascend-container-exporter:v0.4.0 make install
 
-# 3) Add 3 things to each workload (see deploy/workload-example.yaml):
-#    env LD_PRELOAD=/opt/npu-account/libnpu-account.so  (+ two hostPath mounts)
-#    Existing services: python3 deploy/inject.py <deployment...>   (idempotent)
+# 3) Onboard workloads — zero changes to your YAML
+#    The webhook patches any Pod requesting huawei.com/Ascend* resources at creation
+#    (LD_PRELOAD env + /opt/npu-account RO & /run/npu-account RW mounts, and it even
+#    auto-fills runtimeClassName: ascend if missing). Inspect with:
+kubectl get pod -o yaml    # injected fields visible on any Ascend pod
+
+# (Alternative) Deployed the DaemonSet without the webhook? Inject manually:
+#    add the env + mounts per workload (see deploy/workload-example.yaml), or
+#    python3 deploy/inject.py <deployment...>   (idempotent)
 
 # 4) Verify
 curl -s localhost:9400/metrics | grep ascend_container_hbm_live_bytes

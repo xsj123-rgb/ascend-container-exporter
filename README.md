@@ -92,11 +92,14 @@ IMAGE=<你的仓库>/ascend-container-exporter:v0.4.0 make install
 
 不想要 webhook 自动注入的，也可以只部署探针：`kubectl apply -f deploy/exporter-daemonset.yaml`。
 
-### 第 3 步：工作负载接入（业务侧，比平时多 3 行）
+### 第 3 步：工作负载接入（业务侧零修改）
 
-给 Deployment 增加三样东西（完整示例见 `deploy/workload-example.yaml`）：
+`make install` 已部署自动注入 webhook：**任何请求 `huawei.com/Ascend*` 资源的 Pod 创建时被自动补齐三件套**，
+业务 YAML 按原样下发即可（甚至忘写 `runtimeClassName` 都会自动补 `ascend`）。
+注入的字段可用 `kubectl get pod -o yaml` 查看，或对照 `deploy/workload-example.yaml`：
 
 ```yaml
+# 以下由 webhook 在 Pod 创建时自动注入，业务侧无需手写：
 runtimeClassName: ascend                      # 昇腾 Pod 本来就需要
 env:
 - name: LD_PRELOAD
@@ -109,25 +112,24 @@ volumes:
 - {name: npu-account-data, hostPath: {path: /run/npu-account, type: DirectoryOrCreate}}
 ```
 
-存量服务批量注入（幂等，自动处理 jemalloc 等已有 LD_PRELOAD 与空 volumeMounts）：
-
-```bash
-python3 deploy/inject.py <deployment-1> <deployment-2> ...
-```
-
-### 第 3.5 步：MutatingWebhook 自动注入（`make install` 已内置）
-
-`make install` 会一并部署自动注入 webhook：**任何请求 `huawei.com/Ascend*` 资源的 Pod 创建时被自动补齐三件套**，你的下发方式完全不变（甚至忘写 `runtimeClassName` 都会自动补 `ascend`）。
-
 设计要点：
 
 - **与 HAMi 的 vgpu.hami.io webhook 共存**：只补 env/volumeMounts/volumes 三处，与 HAMi 的
   annotation/调度链字段不相交；不碰 nodeName/schedulerName/resources；幂等可重入
 - **只动该动的**：非昇腾 Pod 原样放行；`failurePolicy: Ignore` —— webhook 挂了业务照常创建，仅缺监控
 - `runtimeClassName: ascend` 可选自动补齐（`-add-runtime-class=true` 默认开启，仅当 Pod 未写时）
-- 建议同时部署，服务数量多后可退役手动 inject 流程
 
-滚动重启后即生效：服务加载模型时显存逐笔入账，`ascend_container_hbm_live_bytes` 开始出数。
+服务加载模型时显存逐笔入账，`ascend_container_hbm_live_bytes` 开始出数。
+
+### 备选路径：手动注入（未部署 webhook 时）
+
+若第 2 步选择了只部署探针 DaemonSet（`kubectl apply -f deploy/exporter-daemonset.yaml`，
+不带 webhook 自动注入），则工作负载需要手动加上面这段配置；存量服务可用批量注入脚本
+（幂等，自动处理 jemalloc 等已有 LD_PRELOAD 与空 volumeMounts）：
+
+```bash
+python3 deploy/inject.py <deployment-1> <deployment-2> ...
+```
 
 ### 第 4 步：验证
 
@@ -234,7 +236,7 @@ MindIE 大版本更新后建议先用 `test/e2e-test-pod.yaml` 回归一次。
 
 ## 路线图
 
-- [x] ~~MutatingWebhook 自动注入~~ → v0.3.0 已实现（见「第 3.5 步」）
+- [x] ~~MutatingWebhook 自动注入~~ → v0.3.0 实现，v0.4.0 起 `make install` 默认内置
 - [ ] 容器级算力使用率（`rtKernelLaunch` 族拦截 + 时间片统计）
 - [ ] recording rule / Grafana dashboard 开箱样例
 - [ ] 310P / 910C 等型号适配验证
