@@ -1,0 +1,48 @@
+# 工作负载接入示例：给任意昇腾推理/训练工作负载增加 3 项配置即可被采集
+# 关键 = LD_PRELOAD 环境变量 + 两个 hostPath 挂载；runtimeClassName: ascend 是昇腾 Pod 本来就需要的
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: my-vllm-service
+  namespace: default
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: my-vllm-service
+  template:
+    metadata:
+      labels:
+        app: my-vllm-service
+    spec:
+      runtimeClassName: ascend          # ① 昇腾 Pod 必备（由集群侧 Ascend-Docker-Runtime 提供 vNPU 设备）
+      containers:
+      - name: server
+        image: your-registry.example.com/vllm-ascend:vX.Y.Z
+        env:
+        - name: LD_PRELOAD              # ② 记账 shim
+          value: /opt/npu-account/libnpu-account.so
+        # 若镜像自带 LD_PRELOAD（如 jemalloc），改为冒号拼接、不可覆盖：
+        #   value: /usr/lib/aarch64-linux-gnu/libjemalloc.so.2:/opt/npu-account/libnpu-account.so
+        resources:
+          requests:
+            huawei.com/Ascend910B3: 1
+            huawei.com/Ascend910B3-memory: "32768"   # HAMi 模板切分（按你的调度器实际写法）
+          limits:
+            huawei.com/Ascend910B3: 1
+            huawei.com/Ascend910B3-memory: "32768"
+        volumeMounts:                   # ③ 两个挂载（lib 只读 / data 可写）
+        - name: npu-account-lib
+          mountPath: /opt/npu-account
+          readOnly: true
+        - name: npu-account-data
+          mountPath: /run/npu-account   # 必须可写！记账事件流写在这里
+      volumes:
+      - name: npu-account-lib
+        hostPath:
+          path: /opt/npu-account
+          type: Directory
+      - name: npu-account-data
+        hostPath:
+          path: /run/npu-account
+          type: DirectoryOrCreate

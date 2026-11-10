@@ -1,0 +1,62 @@
+# 端到端自检 Pod：验证「注入 → vNPU 分配 → 容器内分配显存 → 宿主机记账文件 → 指标」全链路
+# 使用：把镜像换成你环境里任一带 torch/torch_npu 的昇腾镜像（imagePullPolicy: Never 可免拉取）
+# 注意（HAMi vNPU 模板切分环境的已知坑）：
+#  - 必须带 runtimeClassName: ascend，否则设备插件不挂 /dev/davinci*，aclInit 报 507008
+#  - hami-ascend-device-plugin 的闲置 vNPU 清理循环（默认每 2 分钟）与新 Pod 建立存在竞态：
+#    新 Pod 创建后 ~47s 内使用登记才落库，若清理恰在其中，vNPU 被误销毁、Pod 永久带 stale 设备。
+#    规避：Pod Ready 后先确认 /dev/davinci* 存在再跑测试；失败则正常 kubectl delete 后重建
+#    （不要用 --force --grace-period=0 强删，会留驱动脏状态）
+apiVersion: v1
+kind: Pod
+metadata:
+  name: npu-account-test
+  namespace: default
+  labels:
+    app: npu-account-test
+spec:
+  runtimeClassName: ascend
+  restartPolicy: Never
+  affinity:                        # 按需约束到某个有空余记账额度的节点
+    nodeAffinity:
+      requiredDuringSchedulingIgnoredDuringExecution:
+        nodeSelectorTerms:
+        - matchExpressions:
+          - key: kubernetes.io/hostname
+            operator: In
+            values: [your-npu-node]
+  containers:
+  - name: test
+    image: your-registry.example.com/vllm-ascend:vX.Y.Z
+    imagePullPolicy: Never
+    command: ["/bin/bash", "-c"]
+    args:
+    - |
+      for f in /usr/local/Ascend/ascend-toolkit/set_env.sh /usr/local/Ascend/nnae/set_env.sh; do
+        [ -f "$f" ] && . "$f"
+      done
+      sleep 900                    # 常驻，用 kubectl exec 驱动测试，便于迭代
+    env:
+    - name: LD_PRELOAD
+      value: /opt/npu-account/libnpu-account.so
+    resources:
+      requests:
+        huawei.com/Ascend910B3: 1
+        huawei.com/Ascend910B3-memory: "32768"
+      limits:
+        huawei.com/Ascend910B3: 1
+        huawei.com/Ascend910B3-memory: "32768"
+    volumeMounts:
+    - name: npu-account-lib
+      mountPath: /opt/npu-account
+      readOnly: true
+    - name: npu-account-data
+      mountPath: /run/npu-account
+  volumes:
+  - name: npu-account-lib
+    hostPath:
+      path: /opt/npu-account
+      type: Directory
+  - name: npu-account-data
+    hostPath:
+      path: /run/npu-account
+      type: DirectoryOrCreate

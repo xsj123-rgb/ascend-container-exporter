@@ -1,0 +1,21 @@
+# 构建产物
+*.o
+*.so
+ascend-container-exporter
+ascend-container-exporter-linux-*
+exporter/ascend-container-exporter
+dist/
+build/
+
+# Go
+*.test
+*.out
+vendor/
+
+# 编辑器/系统
+.DS_Store
+.idea/
+.vscode/
+*.swp
+__pycache__/
+*.pyc

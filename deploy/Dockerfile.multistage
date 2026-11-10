@@ -1,0 +1,19 @@
+# 在线一键构建（需要能访问 docker.io 与 Go module proxy 的环境）
+# 注意：shim 构建阶段的 glibc 版本（gcc:13 容器）可能新于部分国产化 OS（如 glibc 2.28 的 Kylin V10）。
+# 若目标节点加载 .so 报 GLIBC 版本错误，请改用 README「离线构建」流程（在 NPU 节点上直接 gcc 编译 shim）。
+FROM --platform=$BUILDPLATFORM golang:1.25-alpine AS gobuild
+WORKDIR /src
+COPY exporter/go.mod exporter/go.sum ./
+RUN go mod download
+COPY exporter/ .
+ARG TARGETOS TARGETARCH
+RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -ldflags="-s -w" -o /out/ascend-container-exporter .
+
+FROM --platform=linux/arm64 gcc:13 AS shimbuild
+COPY shim/npu_shim.c /src/npu_shim.c
+RUN gcc -shared -fPIC -O2 -Wall -o /out/libnpu-account.so /src/npu_shim.c -ldl -lpthread -lrt
+
+FROM --platform=linux/arm64 busybox:latest
+COPY --from=gobuild /out/ascend-container-exporter /usr/local/bin/ascend-container-exporter
+COPY --from=shimbuild /out/libnpu-account.so /opt/npu-account/libnpu-account.so
+ENTRYPOINT ["/usr/local/bin/ascend-container-exporter"]

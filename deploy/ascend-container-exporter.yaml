@@ -1,0 +1,146 @@
+# ascend-container-exporter DaemonSet 部署清单
+# 使用前：把两处镜像替换为你仓库中的实际镜像（make image 产物）
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: ascend-container-exporter
+  namespace: monitoring
+  labels:
+    app: ascend-container-exporter
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: ascend-container-exporter
+  labels:
+    app: ascend-container-exporter
+rules:
+- apiGroups: [""]
+  resources: ["pods"]
+  verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: ascend-container-exporter
+  labels:
+    app: ascend-container-exporter
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: ascend-container-exporter
+subjects:
+- kind: ServiceAccount
+  name: ascend-container-exporter
+  namespace: monitoring
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: ascend-container-exporter
+  namespace: monitoring
+  labels:
+    app: ascend-container-exporter
+spec:
+  selector:
+    matchLabels:
+      app: ascend-container-exporter
+  updateStrategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 1
+  template:
+    metadata:
+      labels:
+        app: ascend-container-exporter
+    spec:
+      serviceAccountName: ascend-container-exporter
+      hostNetwork: true
+      hostPID: true            # /proc 即宿主机视图（容器 pid 存活判定依赖）
+      dnsPolicy: ClusterFirstWithHostNet
+      nodeSelector:
+        ascend: "on"           # 按需改成你的 NPU 节点标签
+      initContainers:
+      - name: install-shim
+        # 把 shim 自动铺到每个节点 /opt/npu-account（新节点加入零手工）
+        image: your-registry.example.com/ascend-container-exporter:v0.2.0
+        command: ["sh", "-c", "cp /opt/npu-account/libnpu-account.so /host-npu-account/libnpu-account.so && chmod 755 /host-npu-account/libnpu-account.so && echo shim-installed"]
+        volumeMounts:
+        - name: host-npu-account
+          mountPath: /host-npu-account
+      containers:
+      - name: exporter
+        image: your-registry.example.com/ascend-container-exporter:v0.2.0
+        imagePullPolicy: IfNotPresent
+        args:
+        - -dir=/run/npu-account
+        - -listen=:9400
+        - -interval=10s
+        env:
+        - name: NODE_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: spec.nodeName
+        ports:
+        - name: http
+          containerPort: 9400
+        volumeMounts:
+        - name: account-data
+          mountPath: /run/npu-account
+        readinessProbe:
+          httpGet:
+            path: /healthz
+            port: 9400
+          initialDelaySeconds: 3
+          periodSeconds: 10
+      volumes:
+      - name: host-npu-account
+        hostPath:
+          path: /opt/npu-account
+          type: DirectoryOrCreate
+      - name: account-data
+        hostPath:
+          path: /run/npu-account
+          type: DirectoryOrCreate
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ascend-container-exporter
+  namespace: monitoring
+  labels:
+    app: ascend-container-exporter
+spec:
+  clusterIP: None
+  selector:
+    app: ascend-container-exporter
+  ports:
+  - name: http
+    port: 9400
+    targetPort: 9400
+---
+# ServiceMonitor：kube-prometheus-stack（Prometheus Operator）环境即插即用；
+# 若你的 Prometheus 由其他方式管理，按同样端口自行加 scrape job
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: ascend-container-exporter
+  namespace: monitoring
+  labels:
+    app: ascend-container-exporter
+spec:
+  endpoints:
+  - interval: 15s
+    path: /metrics
+    port: http
+    relabelings:
+    - action: replace
+      sourceLabels:
+      - __meta_kubernetes_endpoint_node_name
+      targetLabel: node
+  namespaceSelector:
+    matchNames:
+    - monitoring
+  selector:
+    matchLabels:
+      app: ascend-container-exporter
