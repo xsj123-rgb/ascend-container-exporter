@@ -41,7 +41,7 @@ import (
 	"k8s.io/client-go/tools/clientcmd"
 )
 
-const version = "0.4.0"
+const version = "0.5.0"
 
 // ---- 事件与状态 ----
 

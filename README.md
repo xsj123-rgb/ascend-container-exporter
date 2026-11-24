@@ -198,7 +198,7 @@ bash test/smoke.sh <namespace> <deployment>
 |---|---|
 | 硬件 | Ascend 910B3（aarch64） |
 | 驱动/固件 | npu-smi 25.2.0 |
-| CANN | 8.x 符号集（参考 hami-vnpu-core）；9.0.1 / 9.1.0 实测通过 |
+| CANN | 8.x 符号集（参考 hami-vnpu-core）；9.0.1 / 9.1.0（rt 层）+ 9.2.0（ACL vMM 层）实测通过 |
 | 推理栈 | vllm-ascend v0.23 / v0.26、MindIE 系服务、PyTorch 2.10 + torch_npu |
 | Kubernetes | v1.28（containerd；需 Pod 的 cgroup 含 `cri-containerd-<id>.scope`） |
 | 调度 | HAMi v2.9（ascend-device-plugin 模板切分模式）+ 整卡混部 |
@@ -209,8 +209,10 @@ MindIE 大版本更新后建议先用 `test/e2e-test-pod.yaml` 回归一次。
 
 ## 已知限制与注意事项
 
-1. **rt\* 是 libruntime 内部 ABI**：华为不承诺跨版本稳定。若未来 CANN 改名/移除符号，
-   shim 的导出函数不再被调用 → 记账静默消失（**不会影响业务分配**，安全降级），升级 CANN 后请回归验证。
+1. **CANN 大版本升级必须回归探针**：v0.4.x 在 CANN 9.2.0 上记账静默消失过一次
+   （版本化运行时绕开 rt\* 旧符号），v0.5.0 起双层钩子（rt\* + ACL vMM）覆盖 9.0~9.2+。
+   仍需注意：shim 更新后要重建业务 Pod 才加载新 .so；升级 CANN 后建议用 `test/e2e-test-pod.yaml` 回归。
+   任何情况下钩子失效都只是丢监控、**不影响业务分配**（安全降级）。
 2. **性能开销极小但存在**：每次显存分配/释放多一次 mutex + 一次小 JSON 行追加（<1μs 量级）；
    模型加载期数千次分配实测无感。
 3. **懒加载服务首数据延迟**：CANN 运行时在首次使用 NPU 时才加载，记账随首个请求出现（如 OCR 类服务）——属预期。

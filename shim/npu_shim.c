@@ -1,17 +1,21 @@
 /*
- * libnpu-account v0.2.0 — LD_PRELOAD 显存记账 shim
+ * libnpu-account v0.5.0 — LD_PRELOAD 显存记账 shim
  *
- * 拦截 libruntime.so 的设备显存分配 ABI（rtMalloc/rtMemAlloc/rtMallocPhysical 等，
- * 符号集与 hami-vnpu-core 生产实践一致），按事件流 JSONL 落盘：
- *   {dir}/{container_id}.jsonl
- *   dir 默认 /run/npu-account（Pod 内 hostPath 挂载同路径），可用 NPU_ACCOUNT_DIR 覆盖
+ * 双层拦截，覆盖 CANN 新旧两代分配路径：
+ *   ① libruntime 的 rt* 内部 ABI（rtMalloc/rtMemAlloc/rtMallocPhysical 等）—— CANN ≤ 9.1 的路径；
+ *   ② libascendcl 的 ACL vMM 公共 API（aclrtMalloc/aclrtMallocPhysical 等）——
+ *      CANN 9.2.0 起版本化运行时(rt2 registry)不再调用 rt*，torch_npu 经 PLT 直连 ACL 层。
  *
- * 事件行（单次 write + O_APPEND，进程间不交错）：
- *   {"t":"I","pid":..,"cid":".."}                              进程加载 shim
- *   {"t":"M","pid":..,"sym":"rtMalloc","key":"0x..","size":..} 分配
- *   {"t":"F","pid":..,"sym":"rtFree","key":"0x..","size":..}   释放
- *   {"t":"S","pid":..,"hpid":..,"live":..,"total":..,"freed":..} 每事件后快照(聚合器取每 pid 最后一条)
- *   {"t":"X","pid":..,"hpid":..,"live":..,...}                  进程退出
+ * 防双计：老栈上「torch→aclrtMalloc(外层)→rtMalloc(内层)」同笔分配会同时命中两层——
+ * ACL 钩子记账后写线程局部缓存 (key,size)，内层 rt 钩子发现精确匹配则只透传不记账；
+ * 释放方向天然安全（F 按键查表删除，外层先删则内层自动 no-op）。
+ *
+ * 事件流 JSONL 落盘：{dir}/{container_id}.jsonl（dir 默认 /run/npu-account，NPU_ACCOUNT_DIR 覆盖）
+ *   {"t":"I","pid":..,"cid":".."}
+ *   {"t":"M","pid":..,"sym":"aclrtMallocPhysical|rtMalloc|...","key":"0x..","size":..}
+ *   {"t":"F","pid":..,"sym":"...","key":"0x..","size":..}
+ *   {"t":"S","pid":..,"hpid":..,"live":..,"total":..,"freed":..}   每事件后快照
+ *   {"t":"X","pid":..,"hpid":..,"live":..,...}
  *
  * 编译（在目标节点或 glibc 不新于目标节点的 aarch64 环境执行）:
  *   gcc -shared -fPIC -O2 -Wall -o libnpu-account.so npu_shim.c -ldl -lpthread -lrt
@@ -28,7 +32,7 @@
 #include <time.h>
 #include <unistd.h>
 
-/* ---- libruntime 内部 ABI ---- */
+/* ---- libruntime 内部 ABI（CANN ≤ 9.1 路径） ---- */
 static uint64_t (*real_rtMalloc)(void **, uint64_t, uint32_t, uint16_t);
 static uint64_t (*real_rtMallocCached)(void **, uint64_t, uint32_t, uint16_t);
 static uint64_t (*real_rtMemAlloc)(void **, uint64_t, uint32_t, uint32_t, uint64_t);
@@ -36,6 +40,16 @@ static uint64_t (*real_rtMallocPhysical)(uint64_t *, uint64_t, void *, uint64_t)
 static uint64_t (*real_rtFree)(void *);
 static uint64_t (*real_rtsFree)(void *);
 static uint64_t (*real_rtFreePhysical)(uint64_t);
+
+/* ---- libascendcl ACL vMM API（CANN 9.2+ 路径，aclError=int） ---- */
+static int (*real_aclrtMalloc)(void **, uint64_t, int);
+static int (*real_aclrtMallocPhysical)(uint64_t *, uint64_t, void *, uint64_t); /* 4 参: handle,size,prop,flags */
+static int (*real_aclrtFree)(void *);
+static int (*real_aclrtFreePhysical)(uint64_t);
+
+/* ---- 防双计：ACL 层刚记过账的 (key,size)，内层 rt 钩子精确匹配则跳过 ---- */
+static __thread void  *t_dedup_key;
+static __thread uint64_t t_dedup_sz;
 
 /* ---- 记账状态（进程内） ---- */
 #define MAX_KEYS 65536
@@ -133,6 +147,29 @@ static void *resolve_rt(const char *sym)
     return h ? dlsym(h, sym) : NULL;
 }
 
+static void *resolve_acl(const char *sym)
+{
+    void *p = dlsym(RTLD_NEXT, sym);
+    if (p) return p;
+    static void *h;
+    if (!h) {
+        h = dlopen("libascendcl.so", RTLD_LAZY | RTLD_NOLOAD);
+        if (!h) h = dlopen("libascendcl.so", RTLD_LAZY);
+    }
+    return h ? dlsym(h, sym) : NULL;
+}
+
+/* rt 层记账前查防双计缓存：与 ACL 层刚记的 (key,size) 精确匹配则跳过 */
+static int dedup_hit(void *key, uint64_t sz)
+{
+    if (t_dedup_key == key && t_dedup_sz == sz && t_dedup_key != NULL) {
+        t_dedup_key = NULL;
+        t_dedup_sz = 0;
+        return 1;
+    }
+    return 0;
+}
+
 __attribute__((constructor)) static void ctor(void)
 {
     discover_cid();
@@ -203,14 +240,15 @@ static void do_record_free(const char *sym, void *key)
     pthread_mutex_unlock(&g_lock);
 }
 
-/* ---- 拦截层 ---- */
+/* ---- 拦截层①：libruntime rt*（CANN ≤ 9.1 路径；ACL 层已记过的同笔分配自动跳过） ---- */
 
 uint64_t rtMalloc(void **devPtr, uint64_t size, uint32_t t, uint16_t moduleId)
 {
     if (!real_rtMalloc) real_rtMalloc = (void *)resolve_rt("rtMalloc");
     if (!real_rtMalloc) return 0xFFFFFFFF;
     uint64_t r = real_rtMalloc(devPtr, size, t, moduleId);
-    if (r == 0 && devPtr && *devPtr) do_record_alloc("rtMalloc", *devPtr, size);
+    if (r == 0 && devPtr && *devPtr && !dedup_hit(*devPtr, size))
+        do_record_alloc("rtMalloc", *devPtr, size);
     return r;
 }
 
@@ -219,7 +257,8 @@ uint64_t rtMallocCached(void **devPtr, uint64_t size, uint32_t t, uint16_t modul
     if (!real_rtMallocCached) real_rtMallocCached = (void *)resolve_rt("rtMallocCached");
     if (!real_rtMallocCached) return 0xFFFFFFFF;
     uint64_t r = real_rtMallocCached(devPtr, size, t, moduleId);
-    if (r == 0 && devPtr && *devPtr) do_record_alloc("rtMallocCached", *devPtr, size);
+    if (r == 0 && devPtr && *devPtr && !dedup_hit(*devPtr, size))
+        do_record_alloc("rtMallocCached", *devPtr, size);
     return r;
 }
 
@@ -228,7 +267,8 @@ uint64_t rtMemAlloc(void **devPtr, uint64_t size, uint32_t policy, uint32_t flag
     if (!real_rtMemAlloc) real_rtMemAlloc = (void *)resolve_rt("rtMemAlloc");
     if (!real_rtMemAlloc) return 0xFFFFFFFF;
     uint64_t r = real_rtMemAlloc(devPtr, size, policy, flags, cfg);
-    if (r == 0 && devPtr && *devPtr) do_record_alloc("rtMemAlloc", *devPtr, size);
+    if (r == 0 && devPtr && *devPtr && !dedup_hit(*devPtr, size))
+        do_record_alloc("rtMemAlloc", *devPtr, size);
     return r;
 }
 
@@ -237,7 +277,7 @@ uint64_t rtMallocPhysical(uint64_t *handle, uint64_t size, void *prop, uint64_t 
     if (!real_rtMallocPhysical) real_rtMallocPhysical = (void *)resolve_rt("rtMallocPhysical");
     if (!real_rtMallocPhysical) return 0xFFFFFFFF;
     uint64_t r = real_rtMallocPhysical(handle, size, prop, flags);
-    if (r == 0 && handle && *handle)
+    if (r == 0 && handle && *handle && !dedup_hit((void *)(uintptr_t)*handle, size))
         do_record_alloc("rtMallocPhysical", (void *)(uintptr_t)*handle, size);
     return r;
 }
@@ -266,5 +306,49 @@ uint64_t rtFreePhysical(uint64_t handle)
     if (!real_rtFreePhysical) return 0xFFFFFFFF;
     uint64_t r = real_rtFreePhysical(handle);
     if (r == 0 && handle) do_record_free("rtFreePhysical", (void *)(uintptr_t)handle);
+    return r;
+}
+
+/* ---- 拦截层②：libascendcl ACL vMM API（CANN 9.2+ 路径） ---- */
+
+int aclrtMalloc(void **devPtr, uint64_t size, int policy)
+{
+    if (!real_aclrtMalloc) real_aclrtMalloc = (void *)resolve_acl("aclrtMalloc");
+    if (!real_aclrtMalloc) return 107000;
+    int r = real_aclrtMalloc(devPtr, size, policy);
+    if (r == 0 && devPtr && *devPtr) {
+        t_dedup_key = *devPtr; t_dedup_sz = size;   /* 供内层 rt 钩子去重 */
+        do_record_alloc("aclrtMalloc", *devPtr, size);
+    }
+    return r;
+}
+
+int aclrtMallocPhysical(uint64_t *handle, uint64_t size, void *prop, uint64_t flags)
+{
+    if (!real_aclrtMallocPhysical) real_aclrtMallocPhysical = (void *)resolve_acl("aclrtMallocPhysical");
+    if (!real_aclrtMallocPhysical) return 107000;
+    int r = real_aclrtMallocPhysical(handle, size, prop, flags);
+    if (r == 0 && handle && *handle) {
+        t_dedup_key = (void *)(uintptr_t)*handle; t_dedup_sz = size;
+        do_record_alloc("aclrtMallocPhysical", (void *)(uintptr_t)*handle, size);
+    }
+    return r;
+}
+
+int aclrtFree(void *ptr)
+{
+    if (!real_aclrtFree) real_aclrtFree = (void *)resolve_acl("aclrtFree");
+    if (!real_aclrtFree) return 107000;
+    int r = real_aclrtFree(ptr);
+    if (r == 0 && ptr) do_record_free("aclrtFree", ptr);
+    return r;
+}
+
+int aclrtFreePhysical(uint64_t handle)
+{
+    if (!real_aclrtFreePhysical) real_aclrtFreePhysical = (void *)resolve_acl("aclrtFreePhysical");
+    if (!real_aclrtFreePhysical) return 107000;
+    int r = real_aclrtFreePhysical(handle);
+    if (r == 0 && handle) do_record_free("aclrtFreePhysical", (void *)(uintptr_t)handle);
     return r;
 }

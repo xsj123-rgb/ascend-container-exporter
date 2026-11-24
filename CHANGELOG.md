@@ -1,5 +1,20 @@
 # changelog
 
+## v0.5.0 (2026-11-24) — 修复 CANN 9.2.0+ 记账失效
+
+- **背景**：CANN 9.2.0 引入版本化运行时（libruntime_v100/v200/v201 + rt2 registry），
+  torch_npu/libascendcl 不再调用 rt\* 旧符号 → v0.4.x 的 rt 层钩子零命中、记账静默消失
+  （业务无影响，安全降级符合设计）。生产实例：DeepSeek-V4.1-Flash w4a8 新镜像。
+- **修复**：shim 增加第二层钩子——libascendcl 的 ACL vMM API
+  （aclrtMalloc / aclrtMallocPhysical / aclrtFree / aclrtFreePhysical），新旧两代 CANN 通吃
+- **防双计**：老栈上同笔分配会先后穿过 ACL(外层)与 rt(内层)两层——线程局部 (key,size)
+  去重缓存精确匹配则内层只透传；释放方向按键查表天然幂等
+- **坑**：aclrtMallocPhysical 在 9.2 为 4 参（handle,size,prop,flags），与 9.0 头文件的 3 参
+  不同——签名错位表现为 error 100000 参数校验失败（预验证阶段抓到并修复）
+- 双栈验证：CANN 9.2.0 记账恢复（aclrtMallocPhysical 事件流）；CANN 9.0.1 行为不变
+  （rtMalloc 字节级精确、无双计、存量服务回归全过）
+- 注意：shim 更新需业务 Pod 重建后生效（运行中进程持有旧 .so）
+
 ## v0.4.0 (2026-11-10) — 一键安装 + 结构标准化
 
 - **`make install` 一键安装**：证书/Secret/探针 DaemonSet/自动注入 webhook 全自动，
