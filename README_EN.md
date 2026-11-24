@@ -87,7 +87,7 @@ HBM (~4–5 GB/card in production) is fixed driver/context overhead — compleme
 ## Validated setup
 
 Ascend 910B3 ×16 (HAMi vNPU template slicing + whole-card), driver 25.2.0, CANN 9.0.1/9.1.0,
-vllm-ascend v0.23/v0.26 + MindIE services, PyTorch 2.10 + torch_npu, k8s 1.28 (containerd),
+vllm-ascend v0.23/v0.26 + DeepSeek-V4.1-Flash w4a8 (CANN 9.2.0, ACL-layer accounting, 440GB/8-card) + MindIE services, PyTorch 2.10 + torch_npu, k8s 1.28 (containerd),
 HAMi v2.9, jemalloc coexistence. Byte-exact (256MiB request → 258MiB accounted incl. allocator
 alignment); cross-checked against vLLM `gpu_memory_utilization` budgets and physical-card conservation;
 production-tested on 9 services / 18 cards.

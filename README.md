@@ -17,7 +17,7 @@
 
 | 服务 | 卡型 | 容器级显存（本探针实测） | 交叉验证 |
 |---|---|---|---|
-| dsv4-flash | 8×整卡 | 431.4 GB | vLLM 预算 0.9×64G×8 = 460.8G，加载期 464G → 稳态 431G（图捕获缓存释放）✓ |
+| dsv4-flash | 8×整卡 | 440.0 GB | DeepSeek-V4.1-Flash w4a8 / CANN 9.2.0，v0.5.0 ACL 层记账，8 worker 进程 ✓ |
 | qwen36-35b | 4×整卡 | 222.9 GB | vLLM 预算 0.9×64G×4 = 230.4G ✓ |
 | qwen3-asr | vNPU 32G 切分 | 25.55 GB | vLLM 预算 0.9×30G ✓；与同卡另一容器（tts 8.84G）**各报各的** |
 | qwen3-tts / tts-clone | vNPU 32G 切分 | 各 8.5~8.9 GB | 同模型同配置双值一致；推理请求后实时 +0.3G（KV 缓存）✓ |
@@ -198,7 +198,7 @@ bash test/smoke.sh <namespace> <deployment>
 |---|---|
 | 硬件 | Ascend 910B3（aarch64） |
 | 驱动/固件 | npu-smi 25.2.0 |
-| CANN | 8.x 符号集（参考 hami-vnpu-core）；9.0.1 / 9.1.0（rt 层）+ 9.2.0（ACL vMM 层）实测通过 |
+| CANN | 8.x 符号集（参考 hami-vnpu-core）；9.0.1 / 9.1.0（rt 层）+ **9.2.0（ACL vMM 层，生产验证：8×整卡 440GB）** |
 | 推理栈 | vllm-ascend v0.23 / v0.26、MindIE 系服务、PyTorch 2.10 + torch_npu |
 | Kubernetes | v1.28（containerd；需 Pod 的 cgroup 含 `cri-containerd-<id>.scope`） |
 | 调度 | HAMi v2.9（ascend-device-plugin 模板切分模式）+ 整卡混部 |
